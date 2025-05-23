@@ -1,0 +1,115 @@
+body {
+    background-color: #f2f2f2;
+    font-family: Arial, sans-serif;
+}
+
+.card-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 67vh;
+    margin-top: 15%;
+    margin-left: 8%;
+}
+
+.card {
+    width: 100%;
+    max-width: 900px;
+    border-radius: 12px;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.left-side {
+    background-color: #ffffff;
+    color: #333333;
+    padding: 30px;
+    width: 50%;
+    border-top-left-radius: 12px;
+    border-bottom-left-radius: 12px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.left-side h2 {
+    font-size: 36px;
+    font-weight: bold;
+}
+
+.right-side {
+    background-color: #4E2A84;
+    color: white;
+    padding: 40px;
+    width: 50%;
+    height: 30pc;
+    border-top-right-radius: 25px;
+    border-bottom-right-radius: 25px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+    margin-right: 20px;
+}
+
+.right-side h3 {
+    font-size: 28px;
+    margin-bottom: 10px;
+}
+
+.form-label {
+    font-weight: 500;
+}
+
+.form-control {
+    border-radius: 10px;
+    box-shadow: 0 0 1.5px rgba(0, 0, 0, 0.5);
+}
+
+.btn-login {
+    background-color: #f2f2f2;
+    color: black;
+    border-color: black;
+}
+
+.btn-login:hover {
+    background-color: #4E2A84;
+    color: white;
+}
+
+.btn-signup {
+    background-color: #4E2A84;
+    color: white;
+    border-radius: 8px;
+    margin-top: 10px;
+    border-color: white;
+}
+
+.btn-signup:hover {
+    background-color: #f2f2f2;
+    color: #333333;
+}
+
+/* Ensures the height is adjusted correctly */
+.card-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    height: 100%;
+}
+
+.btn-back {
+    background-color: rgb(250, 118, 118);
+    color: white;
+    border-radius: 8px;
+    margin-top: 10px;
+}
+
+.btn-back:hover {
+    background-color: white;
+    color: black;
+    border-color: #333333;
+}

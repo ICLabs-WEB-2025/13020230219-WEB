@@ -1,0 +1,30 @@
+/* Sidebar fixed yang menyentuh bawah halaman */
+.bg-dark {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 250px;
+}
+
+/* Padding dan margin untuk card */
+.card-body {
+    padding: 20px;
+}
+
+/* Card header */
+.card-header {
+    background-color: #343a40;
+    color: white;
+    font-weight: bold;
+}
+
+/* Tombol */
+.btn {
+    width: 100%;
+}
+
+/* Menambahkan sedikit padding dan margin */
+.row {
+    margin-top: 20px;
+}
