@@ -24,7 +24,7 @@
                     <i class="fas fa-share-alt fa-3x mb-3 text-success"></i>
                     <h5 class="card-title fw-semibold mb-2">Dokumen yang Saya Bagikan</h5>
                     <p class="card-text display-5 fw-bold text-dark mb-0">
-                        {{ number_format($sharedWithYouCount ?? 0, 0, ',', '.') }}
+                        {{ number_format($sharedByYouCount ?? 0, 0, ',', '.') }}
                     </p>
                 </div>
             </div>
@@ -37,7 +37,7 @@
                     <i class="fas fa-inbox fa-3x mb-3 text-info"></i>
                     <h5 class="card-title fw-semibold mb-2">Dokumen Dibagikan kepada Saya</h5>
                     <p class="card-text display-5 fw-bold text-dark mb-0">
-                        {{ number_format($sharedByYouCount ?? 0, 0, ',', '.') }}
+                        {{ number_format($sharedWithYouCount ?? 0, 0, ',', '.') }}
                     </p>
                 </div>
             </div>
