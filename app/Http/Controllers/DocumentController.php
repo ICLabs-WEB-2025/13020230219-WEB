@@ -17,10 +17,13 @@ use PhpOffice\PhpSpreadsheet\IOFactory as PhpSpreadsheetIOFactory;
 use Dompdf\Dompdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use ZipArchive;
 use RarArchive;
+use Illuminate\Support\Str;
+
 
 class DocumentController extends Controller
 {
@@ -38,40 +41,97 @@ class DocumentController extends Controller
     public function view($document_id)
     {
         $document = Document::findOrFail($document_id);
-        $file_path = storage_path("app/public/{$document->file_path}");
-        $file_extension = pathinfo($document->file_name, PATHINFO_EXTENSION);
+        $filePath = storage_path("app/public/{$document->file_path}");
+        // Normalisasi ekstensi file ke huruf kecil untuk konsistensi
+        $fileExtension = strtolower(pathinfo($document->file_name, PATHINFO_EXTENSION));
         $content = null;
         $preview_type = null;
 
+        // Periksa apakah file benar-benar ada di storage
+        if (!Storage::disk('public')->exists($document->file_path)) {
+            Log::error("File not found in storage: app/public/{$document->file_path} for document ID: {$document_id}");
+            return redirect()->route('documents.index')->with('error', 'File tidak ditemukan di server.');
+        }
+
         try {
-            if ($file_extension == 'docx') {
-                $phpWord = PhpWordIOFactory::load($file_path);
-                $content = '';
-                foreach ($phpWord->getSections() as $section) {
-                    foreach ($section->getElements() as $element) {
-                        if (method_exists($element, 'getText')) {
-                            $content .= $element->getText() . "\n";
+            if ($fileExtension == 'docx' || $fileExtension == 'doc') {
+                // Untuk file .docx, ekstensi ZipArchive sangat penting.
+                // Untuk .doc (format biner lama), mungkin tidak secara langsung, tapi library PhpWord bisa memiliki dependensi internal.
+                if ($fileExtension == 'docx' && !class_exists('ZipArchive')) {
+                    Log::error('PHP ZipArchive extension is required for DOCX preview but not found.');
+                    return redirect()->route('documents.index')->with('error', 'Ekstensi PHP ZipArchive diperlukan untuk pratinjau file DOCX. Harap hubungi administrator server.');
+                }
+
+                $readerType = null;
+                if ($fileExtension == 'docx') {
+                    $readerType = 'Word2007'; // Reader untuk format Office Open XML (.docx)
+                } elseif ($fileExtension == 'doc') {
+                    $readerType = 'MsDoc';    // Reader untuk format Word 97-2003 (.doc)
+                }
+
+                if ($readerType) {
+                    try {
+                        $phpWord = PhpWordIOFactory::load($filePath, $readerType);
+                    } catch (\PhpOffice\PhpWord\Exception\Exception $e) {
+                        $errorCode = method_exists($e, 'getCode') ? $e->getCode() : null;
+                        // Kode 19 (ZipArchive::ER_NOZIP) spesifik untuk masalah pembacaan arsip ZIP (umumnya file .docx)
+                        if ($fileExtension == 'docx' && $errorCode === 19) {
+                            Log::error("Error loading DOCX (not a zip archive - code 19) for file: {$filePath}. Error: " . $e->getMessage());
+                            return redirect()->route('documents.index')->with('error', 'Gagal memuat pratinjau file DOCX: File mungkin rusak, bukan format DOCX yang valid, atau ekstensi ZipArchive PHP bermasalah. Error code: 19.');
+                        }
+                        // Untuk error lain atau error pada file .doc
+                        Log::error("PhpWord load failed for file: {$filePath} with reader {$readerType}. Error: " . $e->getMessage() . "\nTrace: " . $e->getTraceAsString());
+                        return redirect()->route('documents.index')->with('error', 'Gagal memuat pratinjau file Word: ' . $e->getMessage());
+                    }
+
+                    // Logika ekstraksi teks yang sedikit lebih baik
+                    $extractedTextParagraphs = [];
+                    foreach ($phpWord->getSections() as $section) {
+                        foreach ($section->getElements() as $element) {
+                            $paragraphText = '';
+                            if ($element instanceof \PhpOffice\PhpWord\Element\TextRun) {
+                                // TextRun adalah kumpulan bagian teks dalam satu paragraf
+                                foreach ($element->getElements() as $textElement) {
+                                    if (method_exists($textElement, 'getText')) {
+                                        $paragraphText .= $textElement->getText();
+                                    }
+                                }
+                            } elseif (method_exists($element, 'getText')) {
+                                // Elemen teks langsung (biasanya teks seluruh paragraf jika tidak dalam TextRun)
+                                $paragraphText = $element->getText();
+                            }
+                            // Anda bisa menambahkan penanganan untuk elemen lain di sini jika perlu (misalnya teks dari sel tabel)
+
+                            if (trim($paragraphText) !== '') {
+                                $extractedTextParagraphs[] = trim($paragraphText);
+                            }
                         }
                     }
+                    // Gabungkan paragraf yang diekstrak dengan dua baris baru diantaranya
+                    $content = implode("\n\n", $extractedTextParagraphs);
+                    $preview_type = 'text';
+                } else {
+                    // Seharusnya tidak terjadi jika ekstensi sudah 'docx' atau 'doc'
+                    return redirect()->route('documents.index')->with('error', 'Jenis file Word tidak dikenal.');
                 }
-                $preview_type = 'text';
-            } elseif ($file_extension == 'xlsx') {
-                $spreadsheet = PhpSpreadsheetIOFactory::load($file_path);
+            } elseif ($fileExtension == 'xlsx') {
+                $spreadsheet = PhpSpreadsheetIOFactory::load($filePath);
                 $sheet = $spreadsheet->getActiveSheet();
                 $content = $sheet->toArray();
                 $preview_type = 'table';
-            } elseif ($file_extension == 'txt') {
-                $content = file_get_contents($file_path);
+            } elseif ($fileExtension == 'txt') {
+                $content = file_get_contents($filePath); // file_get_contents sudah aman karena path sudah divalidasi
                 $preview_type = 'text';
-            } elseif ($file_extension == 'pdf') {
-                // PDF akan ditampilkan dengan iframe atau PDF.js
-                $content = Storage::url($document->file_path);
+            } elseif ($fileExtension == 'pdf') {
+                $content = Storage::url($document->file_path); // Menggunakan Storage::url untuk akses publik
                 $preview_type = 'pdf';
             } else {
                 return redirect()->route('documents.index')->with('error', 'Jenis file tidak didukung untuk pratinjau.');
             }
         } catch (\Exception $e) {
-            return redirect()->route('documents.index')->with('error', 'Gagal memuat pratinjau file: ' . $e->getMessage());
+            // Tangkap semua error lain yang mungkin terjadi
+            Log::error("General error previewing file ID {$document->id} ({$filePath}): " . $e->getMessage() . "\nTrace: " . $e->getTraceAsString());
+            return redirect()->route('documents.index')->with('error', 'Gagal memuat pratinjau file. Terjadi kesalahan umum: ' . $e->getMessage());
         }
 
         return view('documents.view', compact('document', 'content', 'preview_type'));
@@ -79,23 +139,66 @@ class DocumentController extends Controller
 
     public function store(Request $request)
     {
-        // Validasi file yang di-upload
         $request->validate([
-            'file' => 'required|mimes:docx,txt,xlsx,pdf,doc,pptx,jpeg,png|max:50240', // Max 10MB
+            'file' => 'required|file|mimes:docx,xlsx,txt,pdf|max:10240', // Maks 10MB
         ]);
 
-        // Simpan file ke storage
-        $filePath = $request->file('file')->store('documents', 'public');
+        $file = $request->file('file');
+        $originalName = $file->getClientOriginalName(); // e.g., "Laporan Saya (rev 2).docx"
 
-        // Simpan informasi file ke database
-        $document = new Document();
-        $document->user_id = Auth::id();
-        $document->file_name = $request->file('file')->getClientOriginalName();
-        $document->file_path = $filePath;
-        $document->save();
+        // 1. Sanitasi nama file untuk keamanan dan kompatibilitas filesystem
+        // Mengambil nama dasar tanpa ekstensi
+        $baseName = pathinfo($originalName, PATHINFO_FILENAME);
+        // Mengambil ekstensi
+        $extension = $file->getClientOriginalExtension(); // Lebih aman daripada pathinfo untuk ekstensi dari upload
 
-        // Redirect ke halaman dokumen dengan pesan sukses
-        return redirect()->route('documents.index')->with('success', 'Document uploaded successfully!');
+        // Membuat versi nama file yang "aman" untuk disimpan di server
+        // Str::slug akan mengganti spasi dengan '-' dan menghapus karakter non-alfanumerik
+        $safeBaseName = Str::slug($baseName);
+        if (empty($safeBaseName)) { // Jika nama file hanya berisi karakter aneh
+            $safeBaseName = 'file-' . time();
+        }
+
+        $serverFileName = $safeBaseName . '.' . $extension; // e.g., "laporan-saya-rev-2.docx"
+
+        // 2. Penanganan konflik nama file
+        $targetDirectory = 'documents'; // Direktori penyimpanan
+        $counter = 1;
+        $finalServerFileName = $serverFileName;
+        // Cek apakah file dengan nama ini sudah ada di disk 'public' dalam direktori target
+        while (Storage::disk('public')->exists($targetDirectory . '/' . $finalServerFileName)) {
+            $finalServerFileName = $safeBaseName . '_' . $counter . '.' . $extension;
+            $counter++;
+        }
+        // Sekarang $finalServerFileName adalah nama unik yang akan digunakan di server
+        // contoh: "laporan-saya-rev-2.docx" atau "laporan-saya-rev-2_1.docx" jika ada konflik
+
+        // 3. Simpan file ke server dengan nama yang sudah diproses
+        // $path akan berisi 'documents/nama_file_server_final.ext'
+        $path = $file->storeAs($targetDirectory, $finalServerFileName, 'public');
+
+        if (!$path) {
+            return redirect()->route('documents.upload')
+                ->with('error', 'Gagal menyimpan file. Pastikan direktori penyimpanan dapat ditulis.');
+        }
+
+        // 4. Simpan informasi ke database
+        $document = Document::create([
+            'user_id' => Auth::id(),
+            // 'file_name' tetap menyimpan NAMA ASLI yang diupload pengguna, untuk tampilan
+            'file_name' => $originalName,
+            // 'file_path' menyimpan path relatif dengan NAMA FILE SERVER yang sudah diproses
+            'file_path' => $path,
+            'file_type' => $extension,
+        ]);
+
+        Activity::create([
+            'user_id' => Auth::id(),
+            'activity' => 'Mengunggah dokumen: ' . $originalName,
+        ]);
+
+        return redirect()->route('documents.index')
+            ->with('success', "Dokumen '{$originalName}' berhasil diunggah.");
     }
 
     // Menampilkan halaman edit file berdasarkan extension
@@ -328,18 +431,44 @@ class DocumentController extends Controller
         return redirect()->route('documents.index')->with('success', 'Document deleted successfully!');
     }
 
-    public function download($id)
+    public function download($document_id)
     {
-        $document = Document::findOrFail($id);
-        $sharedDocument = SharedDocument::where('document_id', $id)
-            ->where('user_id', Auth::id())
-            ->first();
+        try {
+            $document = Document::findOrFail($document_id);
 
-        if ($sharedDocument && $sharedDocument->can_download) {
-            return response()->download(storage_path('app/' . $document->file_path));
+            if ($document->user_id === Auth::id()) {
+                if (!Storage::disk('public')->exists($document->file_path)) {
+                    Log::warning("PEMILIK - File tidak ditemukan: Dok. ID: {$document->id}, User ID: " . Auth::id() . ", Path: {$document->file_path}");
+                    return redirect()->back()->with('error', 'File dokumen (milik) tidak ditemukan.'); // Pesan spesifik 1
+                }
+                Log::info("PEMILIK - Mengunduh file: Dok. ID: {$document->id}, User ID: " . Auth::id() . ", Path: {$document->file_path}");
+                return Storage::disk('public')->download($document->file_path, $document->file_name);
+            }
+
+            // B. Pemeriksaan Otorisasi Pengguna yang Dibagikan
+            $sharedDocument = DocumentShare::where('document_id', $document_id)
+                ->where('email', Auth::user()->email)
+                ->first();
+
+            if ($sharedDocument) {
+                if (!Storage::disk('public')->exists($document->file_path)) {
+                    Log::warning("SHARED - File tidak ditemukan: Dok. ID: {$document->id}, User Email: " . Auth::user()->email . ", Path: {$document->file_path}");
+                    return redirect()->back()->with('error', 'File dokumen (dibagikan) tidak ditemukan.'); // Pesan spesifik 2
+                }
+                Log::info("SHARED - Mengunduh file: Dok. ID: {$document->id}, User Email: " . Auth::user()->email . ", Path: {$document->file_path}");
+                return Storage::disk('public')->download($document->file_path, $document->file_name);
+            }
+
+            // C. Akses Ditolak
+            Log::warning("DITOLAK - Akses unduh: Dok. ID: {$document->id}, User ID: " . Auth::id());
+            return abort(403, 'Anda tidak memiliki izin untuk mengunduh dokumen ini.');
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            Log::error("GAGAL UNDUH - Dokumen tidak ditemukan: ID: {$document_id}. Error: " . $e->getMessage());
+            return abort(404, 'Dokumen yang Anda cari tidak ditemukan.');
+        } catch (\Exception $e) {
+            Log::error("GAGAL UNDUH - Kesalahan umum: ID: {$document_id}. Error: " . $e->getMessage() . " Stack: " . $e->getTraceAsString());
+            return redirect()->route('documents.index')->with('error', 'Terjadi kesalahan sistem saat mencoba mengunduh dokumen.');
         }
-
-        return abort(403, 'You do not have permission to download this document.');
     }
 
     public function __construct()
@@ -370,7 +499,7 @@ class DocumentController extends Controller
         $document = Document::findOrFail($id);
 
         if ($document->user_id !== auth()->id()) {
-            return redirect()->route('documentShare.index')->with('error', 'Unauthorized');
+            return redirect()->route('documents.index')->with('error', 'Unauthorized');
         }
 
         // Cegah berbagi ke diri sendiri
@@ -387,15 +516,19 @@ class DocumentController extends Controller
             return redirect()->route('documents.index')->with('error', 'This document is already shared with this email.');
         }
 
+        // Share document
         $document->sharedWith()->create(['email' => $request->email]);
 
+        // Log activity
         Activity::create([
             'user_id' => Auth::id(),
             'activity' => 'Shared document: ' . $document->file_name . ' with ' . $request->email,
         ]);
 
+        // Redirect with success message
         return redirect()->route('documents.index')->with('success', 'Document shared successfully');
     }
+
 
     public function unshare(Request $request, $document_id, $share_id)
     {
