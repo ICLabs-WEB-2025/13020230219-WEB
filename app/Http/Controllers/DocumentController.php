@@ -203,66 +203,66 @@ class DocumentController extends Controller
 
     // Menampilkan halaman edit file berdasarkan extension
     public function edit($document_id)
-{
-    $document = Document::findOrFail($document_id);
-    $file_path = storage_path("app/public/{$document->file_path}");
-    $file_extension = pathinfo($document->file_name, PATHINFO_EXTENSION);
-    $content = '';
+    {
+        $document = Document::findOrFail($document_id);
+        $file_path = storage_path("app/public/{$document->file_path}");
+        $file_extension = pathinfo($document->file_name, PATHINFO_EXTENSION);
+        $content = '';
 
-    try {
-        if ($file_extension == 'docx') {
-            $phpWord = PhpWordIOFactory::load($file_path);
-            $content = ''; // Inisialisasi konten kosong
+        try {
+            if ($file_extension == 'docx') {
+                $phpWord = PhpWordIOFactory::load($file_path);
+                $content = ''; // Inisialisasi konten kosong
 
-            // Menambahkan logika untuk mengambil teks saja, bukan dalam bentuk HTML
-            foreach ($phpWord->getSections() as $section) {
-                foreach ($section->getElements() as $element) {
-                    if (method_exists($element, 'getText')) {
-                        $text = trim($element->getText());
-                        if ($text !== '') {
-                            $content .= $text . "\n";  // Menambahkan teks tanpa tag HTML
+                // Menambahkan logika untuk mengambil teks saja, bukan dalam bentuk HTML
+                foreach ($phpWord->getSections() as $section) {
+                    foreach ($section->getElements() as $element) {
+                        if (method_exists($element, 'getText')) {
+                            $text = trim($element->getText());
+                            if ($text !== '') {
+                                $content .= $text . "\n";  // Menambahkan teks tanpa tag HTML
+                            }
                         }
                     }
                 }
+
+                // Catat aktivitas
+                Activity::create([
+                    'user_id' => Auth::id(),
+                    'activity' => 'Edit document: ' . $document->file_name,
+                ]);
+
+                // Menampilkan halaman edit dengan teks biasa
+                return view('documents.edit-docx-ckeditor5', compact('content', 'document'));
+            } elseif ($file_extension == 'xlsx') {
+                $spreadsheet = PhpSpreadsheetIOFactory::load($file_path);
+                $sheet = $spreadsheet->getActiveSheet();
+                $content = $sheet->toArray();
+
+                // Catat aktivitas
+                Activity::create([
+                    'user_id' => Auth::id(),
+                    'activity' => 'Edit document: ' . $document->file_name,
+                ]);
+                return view('documents.edit-xlsx', compact('content', 'document'));
+            } elseif ($file_extension == 'txt') {
+                // Membaca konten file .txt
+                // Catat aktivitas
+                Activity::create([
+                    'user_id' => Auth::id(),
+                    'activity' => 'Edit document: ' . $document->file_name,
+                ]);
+                $content = file_get_contents($file_path);  // Membaca isi file tanpa <br/>
+                return view('documents.edit-txt', compact('content', 'document'));
+            } else {
+                return redirect()->route('documents.index')->with('error', 'Jenis file tidak didukung untuk pengeditan.');
             }
-
-            // Catat aktivitas
-            Activity::create([
-                'user_id' => Auth::id(),
-                'activity' => 'Edit document: ' . $document->file_name,
-            ]);
-            
-            // Menampilkan halaman edit dengan teks biasa
-            return view('documents.edit-docx-ckeditor5', compact('content', 'document'));
-        } elseif ($file_extension == 'xlsx') {
-            $spreadsheet = PhpSpreadsheetIOFactory::load($file_path);
-            $sheet = $spreadsheet->getActiveSheet();
-            $content = $sheet->toArray();
-
-            // Catat aktivitas
-            Activity::create([
-                'user_id' => Auth::id(),
-                'activity' => 'Edit document: ' . $document->file_name,
-            ]);
-            return view('documents.edit-xlsx', compact('content', 'document'));
-        } elseif ($file_extension == 'txt') {
-            // Membaca konten file .txt
-            // Catat aktivitas
-            Activity::create([
-                'user_id' => Auth::id(),
-                'activity' => 'Edit document: ' . $document->file_name,
-            ]);
-            $content = file_get_contents($file_path);  // Membaca isi file tanpa <br/>
-            return view('documents.edit-txt', compact('content', 'document'));
-        } else {
-            return redirect()->route('documents.index')->with('error', 'Jenis file tidak didukung untuk pengeditan.');
+        } catch (\Exception $e) {
+            // Debugging: Tampilkan detail error
+            // dd($e->getMessage());
+            return redirect()->route('documents.index')->with('error', 'Gagal memuat file untuk pengeditan: ' . $e->getMessage());
         }
-    } catch (\Exception $e) {
-        // Debugging: Tampilkan detail error
-        // dd($e->getMessage());
-        return redirect()->route('documents.index')->with('error', 'Gagal memuat file untuk pengeditan: ' . $e->getMessage());
     }
-}
 
 
     public function downloadAsPdf($document_id)
@@ -369,38 +369,45 @@ class DocumentController extends Controller
                 file_put_contents($file_path, $request->input('content'));
             }
             // Untuk file .xlsx (Excel)
-            elseif ($file_extension == 'xlsx') {
+            if ($file_extension == 'xlsx') {
                 $spreadsheet = PhpSpreadsheetIOFactory::load($file_path);
                 $sheet = $spreadsheet->getActiveSheet();
 
-                // Hapus semua data di sheet aktif
+                // Hapus semua isi sheet
                 $highestRow = $sheet->getHighestRow();
                 if ($highestRow > 0) {
-                    $sheet->removeRow(1, $highestRow); // Hapus semua baris
+                    $sheet->removeRow(1, $highestRow);
                 }
 
-                // Ambil data dari input tabel
-                $cells = $request->input('cells', []);
+                // Ambil dari textarea, bukan dari 'cells'
+                $rawText = $request->input('content', '');
 
-                // Jika cells kosong, simpan file tanpa menulis data baru
-                if (!empty($cells)) {
-                    // Loop untuk setiap baris dan kolom
-                    foreach ($cells as $rowIndex => $row) {
-                        foreach ($row as $colIndex => $value) {
-                            if (trim($value) !== '') { // Hanya tulis nilai yang tidak kosong
-                                $columnLetter = Coordinate::stringFromColumnIndex($colIndex + 1);
+                if (trim($rawText) !== '') {
+                    $rows = explode("\n", trim($rawText));
+                    foreach ($rows as $rowIndex => $row) {
+                        $columns = array_map('trim', explode(',', $row));
+                        foreach ($columns as $colIndex => $value) {
+                            if ($value !== '') {
+                                $columnLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIndex + 1);
                                 $sheet->setCellValue($columnLetter . ($rowIndex + 1), $value);
                             }
                         }
                     }
                 }
 
-                // Simpan file yang diperbarui
-                $newFilePath = storage_path("app/public/updated_{$document->file_name}");
+                // Simpan file
                 $writer = PhpSpreadsheetIOFactory::createWriter($spreadsheet, 'Xlsx');
-                $writer->save($newFilePath);
-                $document->file_path = "updated_{$document->file_name}";
+                $writer->save($file_path);
+
                 $document->save();
+
+                // Catat aktivitas
+                Activity::create([
+                    'user_id' => Auth::id(),
+                    'activity' => 'Updated Excel document: ' . $document->file_name,
+                ]);
+
+                return redirect()->route('documents.index')->with('success', 'Excel file updated.');
             } else {
                 return redirect()->route('documents.index')->with('error', 'Jenis file tidak didukung.');
             }
