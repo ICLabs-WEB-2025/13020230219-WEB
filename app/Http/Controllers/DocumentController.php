@@ -75,7 +75,7 @@ class DocumentController extends Controller
                     } catch (\PhpOffice\PhpWord\Exception\Exception $e) {
                         $errorCode = method_exists($e, 'getCode') ? $e->getCode() : null;
                         // Kode 19 (ZipArchive::ER_NOZIP) spesifik untuk masalah pembacaan arsip ZIP (umumnya file .docx)
-                        if ($fileExtension == 'docx' && $errorCode === 19) {
+                        if ($fileExtension == 'docx') {
                             Log::error("Error loading DOCX (not a zip archive - code 19) for file: {$filePath}. Error: " . $e->getMessage());
                             return redirect()->route('documents.index')->with('error', 'Gagal memuat pratinjau file DOCX: File mungkin rusak, bukan format DOCX yang valid, atau ekstensi ZipArchive PHP bermasalah. Error code: 19.');
                         }
